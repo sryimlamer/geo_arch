@@ -1,3 +1,4 @@
+# Скрипт телеграм-бота
 import telebot
 import os
 import sqlite3
@@ -7,8 +8,9 @@ import re
 import requests
 from telebot.types import InputMediaPhoto
 from telebot.util import smart_split
+import json
 
-token = os.getenv('API_BOT_TOKEN')
+token = '5956727962:AAGSgXUA46pabNdijMqrGJqYtWbFjhZgjrA'
 bot = telebot.TeleBot(token)
 
 
@@ -36,6 +38,17 @@ def haversine(lon1, lat1, lon2, lat2):
     return c * r
 
 
+def get_distance(long0, lat0, long1, lat1):
+    point1 = {"lat":lat0, "lon":long0}
+    point2 = {"lat":lat1, "lon":long1}
+
+    url = f"""http://router.project-osrm.org/route/v1/foot/{point1["lat"]},{point1["lon"]};{point2["lat"]},{point2["lon"]}?overview=false&alternatives=false"""
+    r = requests.get(url)
+
+    route = json.loads(r.content)["routes"][0]
+    return round(route["distance"]/1000, 4)
+
+
 @bot.message_handler(content_types=['location'])
 def get_loc(message):
     long0 = message.location.longitude
@@ -58,30 +71,38 @@ def quant_build(message, lat, long):
 @bot.message_handler(content_types=['text'])
 def get_info(message, lat, long):
 
-    bot.send_message(message.chat.id, 'Информация принята. Пожалуйста, подождите. Загрузка изображений требует существенного количества времени.')
+    bot.send_message(message.chat.id, 'Информация принята. Пожалуйста, подождите. Загрузка изображений требует существенного количества времени (2-3 минуты).')
     quantity = int(message.text)
     with sqlite3.connect('houses1.db') as connection:
         cursor = connection.cursor()
         connection.create_function('haversine', 4, haversine)
-        sql = f'''SELECT name, address, text_info, photos, haversine(longitude, latitude, {long}, {lat}) AS distance, longitude, latitude, yearsOfConstruction FROM main ORDER BY distance LIMIT {quantity}'''
+        sql = f'''SELECT name, address, text_info, photos, haversine(longitude, latitude, {long}, {lat}) AS distance, longitude, latitude, yearsOfConstruction FROM main ORDER BY distance LIMIT 50'''
         cursor.execute(sql)
-        rows = cursor.fetchall()
+        results = cursor.fetchall()
 
-        for row in rows:
-            name = row[0]
-            address = row[1]
-            dist = round(row[4], 3) * 1000
+        # Пересчет расстояний по местности
+        new_results = []
+        for result in results:
+            new_results.append([result, get_distance(long, lat, result[5], result[6])])
 
-            # Из-за этого фрагмент есть небольшая задержка, но он устраним, если поработать с БД (я забил)
-            text_info = re.sub('<[^>]*>', '', row[2])
+        new_results = sorted(new_results, key=lambda x: x[1])[:quantity]
+
+        for num, row in enumerate(new_results):
+
+            name = row[0][0]
+            address = row[0][1]
+            dist = int(round(new_results[num][1], 3) * 1000)
+
+            # Из-за этого фрагмента есть небольшая задержка, но он устраним, если поработать с БД (я забил)
+            text_info = re.sub('<[^>]*>', '', row[0][2])
             text_info = re.sub('&nbsp;', '', text_info)
             text_info = re.sub("^\s+|\n|\s+$", '', text_info)
-            photos = row[3].split("'")
+            photos = row[0][3].split("'")
 
-            if row[7] != 'None':
+            if row[0][7] == 'None':
                 info = f''' \t <ins>Название</ins>: <b>{name}</b> \n \n <ins>Расстояние до здания</ins>: {dist}м \n \n <ins>Информация</ins>:\n \t  {text_info} \n \n \t <b>Адрес</b>: <i>{address}</i>'''
             else:
-                info = f''' \t <ins>Название</ins>: <b>{name}</b> \n \n <ins>Расстояние до здания</ins>: {dist}м \n \n <ins>Годы постройки</ins>: {row[7]} \n \n <ins>Информация</ins>:\n \t  {text_info} \n \n \t <b>Адрес</b>: <i>{address}</i>'''
+                info = f''' \t <ins>Название</ins>: <b>{name}</b> \n \n <ins>Расстояние до здания</ins>: {dist}м \n \n <ins>Годы постройки</ins>: {row[0][7]} \n \n <ins>Информация</ins>:\n \t  {text_info} \n \n \t <b>Адрес</b>: <i>{address}</i>'''
 
             # Выборка ссылок на фотографии из исходного файла (для ускорения этой части надо поработать с БД)
             media_group = []
@@ -94,7 +115,7 @@ def get_info(message, lat, long):
             bot.send_media_group(message.chat.id, [InputMediaPhoto(x) for x in media_group], disable_notification=True)
             for mes in smart_split(info):
                 bot.send_message(message.chat.id, mes, parse_mode='HTML')
-            bot.send_location(message.chat.id, longitude=row[5], latitude=row[6])
+            bot.send_location(message.chat.id, longitude=row[0][5], latitude=row[0][6])
 
     end_markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True, selective=True)
     btn1 = types.KeyboardButton(text='Отправить геолокацию', request_location=True)
