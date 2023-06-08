@@ -10,7 +10,7 @@ from telebot.types import InputMediaPhoto
 from telebot.util import smart_split
 import json
 
-token = '5956727962:AAGSgXUA46pabNdijMqrGJqYtWbFjhZgjrA'
+token = ''
 bot = telebot.TeleBot(token)
 
 
